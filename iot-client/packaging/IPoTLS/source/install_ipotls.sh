@@ -6,4 +6,4 @@
 set -e
 logfile="ipotls-install.log"
 
-echo "TESTING"
+echo "Activation Details $ACTIVATION_USERNAME : $ACITVATION_PASSWORD"

@@ -1,0 +1,476 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Parameters" : {
+    "SSHKeyNameParameter" : {
+      "Type" : "String",
+      "Description" : "Enter SSH key name (this is the name of your AWS KeyPair)"
+    },
+    "PassBridgeSubnetCIDR" : {
+      "Type" : "String",
+      "Description" : "The is the subnet address range configured for your PassBridge account",
+      "Default": "172.16.0.0/24"
+    },
+    "YourOfficeIP" : {
+      "Type" : "String",
+      "Default": "e.g. 1.2.4.3/32",
+      "Description" : "This is external IP address/subnet of your office as seen on the internet, this is used to restrict access to this AWS VPC from your office. You can find this using a Google search for 'what is my ip' https://www.google.ie/#q=what+is+my+ip"
+    },
+    "VPCSubnet" : {
+      "Type" : "String",
+      "Description" : "This is the overall subnet of your AWS VPC - also known as CIDR Block",
+      "Default": "10.0.0.0/16"
+    },
+    "PublicSubnetCIDR" : {
+      "Type" : "String",
+      "Description" : "This is the public subnet within your AWS VPC and must lie within the VPC subnet",
+      "Default": "10.0.0.0/24"
+    },
+    "PrivateSubnetCIDR" : {
+      "Type" : "String",
+      "Description" : "This is the private subnet within your AWS VPC and must lie within the VPC subnet",
+      "Default": "10.0.1.0/24"
+    },
+    "LinuxBrokerIP" : {
+      "Type" : "String",
+      "Description" : "This is the private address of the Linux broker within your AWS VPC CIDR Block",
+      "Default": "10.0.0.20"
+    },
+    "ConnectorIP" : {
+      "Type" : "String",
+      "Description" : "This is the private address of the NetworkConnector within your AWS VPC CIDR Block",
+      "Default": "10.0.0.10"
+    }
+  },
+  "Mappings" : {
+      "RegionalInstancesMap" : {
+          "eu-west-1": { "AWSLinux": "ami-e1398992", "WinSRV2012": "ami-9ebb39ed" },
+          "us-east-1": { "AWSLinux": "ami-8fcee4e5", "WinSRV2012": "ami-3586ac5f" },
+          "us-west-2": { "AWSLinux": "ami-d0f506b0", "WinSRV2012": "ami-87c037e7" }
+        }
+  },
+  "Resources": {
+    "iotVPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": { "Ref": "VPCSubnet"},
+        "InstanceTenancy": "default",
+        "EnableDnsSupport": "true",
+        "EnableDnsHostnames": "true"
+      }
+    },
+    "privateSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": { "Ref": "PrivateSubnetCIDR" },
+        "AvailabilityZone": { "Fn::Select" : [ 0, { "Fn::GetAZs" : { "Ref" : "AWS::Region" } } ] },
+        "VpcId": {
+          "Ref": "iotVPC"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "Private subnet"
+          }
+        ]
+      }
+    },
+    "publicSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": { "Ref": "PublicSubnetCIDR" },
+        "AvailabilityZone": { "Fn::Select" : [ 0, { "Fn::GetAZs" : { "Ref" : "AWS::Region" } } ] },
+        "VpcId": {
+          "Ref": "iotVPC"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "Public subnet"
+          }
+        ]
+      }
+    },
+    "internetgw": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+      }
+    },
+    "dhcpoptions": {
+      "Type": "AWS::EC2::DHCPOptions",
+      "Properties": {
+        "DomainName": "eu-west-1.compute.internal",
+        "DomainNameServers": [
+          "AmazonProvidedDNS"
+        ]
+      }
+    },
+    "aclIOT": {
+      "Type": "AWS::EC2::NetworkAcl",
+      "Properties": {
+        "VpcId": {
+          "Ref": "iotVPC"
+        }
+      }
+    },
+    "rtbInternet": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "iotVPC"
+        }
+      }
+    },
+    "eipConnector": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "InstanceId": { "Ref": "instanceConnector" }
+      }
+    },
+    "instanceLinuxBroker": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "DisableApiTermination": "false",
+        "InstanceInitiatedShutdownBehavior": "stop",
+        "ImageId": { "Fn::FindInMap" : [ "RegionalInstancesMap", { "Ref" : "AWS::Region" }, "AWSLinux"]},
+        "InstanceType": "t2.micro",
+        "KeyName": "iot-dev",
+        "Monitoring": "false",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "linux"
+          }
+        ],
+        "NetworkInterfaces": [
+          {
+            "DeleteOnTermination": "true",
+            "Description": "Primary network interface",
+            "DeviceIndex": 0,
+            "SubnetId": {
+              "Ref": "publicSubnet"
+            },
+            "PrivateIpAddresses": [
+              {
+                "PrivateIpAddress": "10.0.0.20",
+                "Primary": "true"
+              }
+            ],
+            "GroupSet": [
+              {
+                "Ref": "sgSSH"
+              },
+              {
+                "Ref": "sgPassbridgeAccess"
+              },
+              {
+                "Ref": "sgMQTT"
+              }
+            ],
+            "AssociatePublicIpAddress": "true"
+          }
+        ]
+      }
+    },
+    "instanceConnector": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "DisableApiTermination": "false",
+        "InstanceInitiatedShutdownBehavior": "stop",
+        "ImageId": { "Fn::FindInMap" : [ "RegionalInstancesMap", { "Ref" : "AWS::Region" }, "WinSRV2012"]},
+        "InstanceType": "t2.micro",
+        "KeyName": "iot-dev",
+        "Monitoring": "false",
+        "SourceDestCheck": "false",
+        "UserData"       : { "Fn::Base64" : {
+          "Fn::Join" : ["", [
+                "{",
+                  "\"vpc-meta\": {",
+                  "\"Name\": \"Asavie IOT TEST VPC\",",
+                  "\"Description\": \"General purpose VPC for testing\",",
+                  "\"MQTTBroker\": \"", { "Fn::GetAtt" : [ "instanceLinuxBroker" , "PrivateIp" ] }, "\",",
+                  "\"Subnet\": \"", { "Fn::GetAtt" : [ "iotVPC" , "CidrBlock" ] }, "\"",
+                  "}",
+                "}"
+            ]]}
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "NetworkConnector"
+          }
+        ],
+        "NetworkInterfaces": [
+          {
+            "DeleteOnTermination": "true",
+            "Description": "Primary network interface",
+            "DeviceIndex": 0,
+            "SubnetId": {
+              "Ref": "publicSubnet"
+            },
+            "PrivateIpAddresses": [
+              {
+                "PrivateIpAddress": "10.0.0.10",
+                "Primary": "true"
+              }
+            ],
+            "GroupSet": [
+              {
+                "Ref": "sgRDPaccessfromYourOffice"
+              }
+            ],
+            "AssociatePublicIpAddress": "true"
+          }
+        ]
+      }
+    },
+    "sgRDPaccessfromYourOffice": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "RDP access",
+        "VpcId": {
+          "Ref": "iotVPC"
+        }
+      }
+    },
+    "sgSSH": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "SSH access",
+        "VpcId": {
+          "Ref": "iotVPC"
+        }
+      }
+    },
+    "sgMQTT": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "MQTT access",
+        "VpcId": {
+          "Ref": "iotVPC"
+        }
+      }
+    },
+    "sgPassbridgeAccess": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "IoT Device access",
+        "VpcId": {
+          "Ref": "iotVPC"
+        }
+      }
+    },
+    "acl1": {
+      "Type": "AWS::EC2::NetworkAclEntry",
+      "Properties": {
+        "CidrBlock": "0.0.0.0/0",
+        "Egress": "true",
+        "Protocol": "-1",
+        "RuleAction": "allow",
+        "RuleNumber": "100",
+        "NetworkAclId": {
+          "Ref": "aclIOT"
+        }
+      }
+    },
+    "acl2": {
+      "Type": "AWS::EC2::NetworkAclEntry",
+      "Properties": {
+        "CidrBlock": "0.0.0.0/0",
+        "Protocol": "-1",
+        "RuleAction": "allow",
+        "RuleNumber": "100",
+        "NetworkAclId": {
+          "Ref": "aclIOT"
+        }
+      }
+    },
+    "subnetacl1": {
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Properties": {
+        "NetworkAclId": {
+          "Ref": "aclIOT"
+        },
+        "SubnetId": {
+          "Ref": "privateSubnet"
+        }
+      }
+    },
+    "subnetacl2": {
+      "Type": "AWS::EC2::SubnetNetworkAclAssociation",
+      "Properties": {
+        "NetworkAclId": {
+          "Ref": "aclIOT"
+        },
+        "SubnetId": {
+          "Ref": "publicSubnet"
+        }
+      }
+    },
+    "gw1": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "iotVPC"
+        },
+        "InternetGatewayId": {
+          "Ref": "internetgw"
+        }
+      }
+    },
+    "subnetrouteInternetAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "rtbInternet"
+        },
+        "SubnetId": {
+          "Ref": "publicSubnet"
+        }
+      }
+    },
+    "routeInternet": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "RouteTableId": {
+          "Ref": "rtbInternet"
+        },
+        "GatewayId": {
+          "Ref": "internetgw"
+        }
+      },
+      "DependsOn": "gw1"
+    },
+    "routeToDevices": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "DestinationCidrBlock": { "Ref": "PassBridgeSubnetCIDR" },
+        "RouteTableId": {
+          "Ref": "rtbInternet"
+        },
+        "InstanceId": { "Ref": "instanceConnector" }
+      },
+      "DependsOn": "instanceConnector"
+    },
+    "dchpassoc1": {
+      "Type": "AWS::EC2::VPCDHCPOptionsAssociation",
+      "Properties": {
+        "VpcId": {
+          "Ref": "iotVPC"
+        },
+        "DhcpOptionsId": {
+          "Ref": "dhcpoptions"
+        }
+      }
+    },
+    "ingressFromVPCAllIPProtos": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgRDPaccessfromYourOffice"
+        },
+        "IpProtocol": "-1",
+        "CidrIp": "10.0.0.0/24"
+      }
+    },
+    "ingressFromPassbridgeAllIPProtos": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgPassbridgeAccess"
+        },
+        "IpProtocol": "-1",
+        "CidrIp": { "Ref": "PassBridgeSubnetCIDR" }
+      }
+    },
+    "ingressRDPFromOffice": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgRDPaccessfromYourOffice"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": "3389",
+        "ToPort": "3389",
+        "CidrIp": { "Ref": "YourOfficeIP" }
+      }
+    },
+    "ingressMQTT": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgMQTT"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": "1883",
+        "ToPort": "1883",
+        "CidrIp": { "Ref": "PassBridgeSubnetCIDR" }
+      }
+    },
+    "ingressMQTTOverTLS": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgMQTT"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": "8883",
+        "ToPort": "8883",
+        "CidrIp": { "Ref": "PassBridgeSubnetCIDR" }
+      }
+    },
+    "ingressFromVPC": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgSSH"
+        },
+        "IpProtocol": "-1",
+        "CidrIp": "10.0.0.0/16"
+      }
+    },
+    "ingressSSHFromOffice": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgSSH"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": "22",
+        "ToPort": "22",
+        "CidrIp": { "Ref": "YourOfficeIP" }
+      }
+    },
+    "egress2": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgRDPaccessfromYourOffice"
+        },
+        "IpProtocol": "-1",
+        "CidrIp": "0.0.0.0/0"
+      }
+    },
+    "egress3": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgSSH"
+        },
+        "IpProtocol": "-1",
+        "CidrIp": "0.0.0.0/0"
+      }
+    }
+  },
+  "Description": "Asavie IOT AWS Sample Stack",
+  "Outputs" : {
+    "connectorExternalIP" : {
+      "Description": "External Elastic IP Address for Connector Agent",
+      "Value": { "Ref": "eipConnector" }
+    },
+    "MQTTInternalAddress" : {
+      "Description": "Internal IP Address for MQTT broker",
+      "Value": { "Fn::GetAtt" : [ "instanceLinuxBroker" , "PrivateIp" ] }
+    }
+  }
+}

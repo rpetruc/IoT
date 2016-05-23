@@ -45,7 +45,7 @@
       "RegionalInstancesMap" : {
           "eu-west-1": { "AWSLinux": "ami-e1398992", "WinSRV2012": "ami-9ebb39ed" },
           "us-east-1": { "AWSLinux": "ami-8fcee4e5", "WinSRV2012": "ami-3586ac5f" },
-          "us-west-2": { "AWSLinux": "ami-d0f506b0", "WinSRV2012": "ami-e6887686" }
+          "us-west-2": { "AWSLinux": "ami-fd807e9d", "WinSRV2012": "ami-e6887686" }
         }
   },
   "Resources": {

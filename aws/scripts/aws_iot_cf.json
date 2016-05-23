@@ -138,7 +138,7 @@
         "Tags": [
           {
             "Key": "Name",
-            "Value": "linux"
+            "Value": "MQTTBroker"
           }
         ],
         "NetworkInterfaces": [
